@@ -489,7 +489,8 @@ open class SegmentSeeker: SegmentSeeking {
             lastSpeechTimestamp: lastSpeechTimestamp,
             constrainedMedianDuration: wordDurations.median,
             maxDuration: wordDurations.max,
-            tokenizer: tokenizer
+            tokenizer: tokenizer,
+            language: options.language
         )
 
         return updatedSegments
@@ -532,7 +533,8 @@ open class SegmentSeeker: SegmentSeeking {
         lastSpeechTimestamp: Float,
         constrainedMedianDuration: Float,
         maxDuration: Float,
-        tokenizer: WhisperTokenizer
+        tokenizer: WhisperTokenizer,
+        language: String? = nil // 【新增】增加 language 参数
     ) -> [TranscriptionSegment] {
         let timeOffset = Float(seek) / Float(WhisperKit.sampleRate)
         var wordIndex = 0
@@ -608,6 +610,9 @@ open class SegmentSeeker: SegmentSeeking {
 
             // Create an updated segment with the word timings
             var updatedSegment = segment
+            
+            // 【新增】判断是否为无空格语言
+            let isSpaceless = ["zh", "ja", "th", "lo", "my", "km", "yue", "ko"].contains(language ?? "")
 
             // TODO: This section is considered a "hack" in the source repo
             // Reference: https://github.com/openai/whisper/blob/ba3f3cd54b0e5b8ce1ab3de13e32122d0d5f98ab/whisper/timing.py#L342
@@ -618,7 +623,7 @@ open class SegmentSeeker: SegmentSeeking {
                 let pauseLength = firstWord.end - lastSpeechTimestamp
                 let firstWordTooLong = firstWord.duration > maxDuration
                 let bothWordsTooLong = wordsInSegment.count > 1 && wordsInSegment[1].end - firstWord.start > maxDuration * 2
-                if pauseLength > constrainedMedianDuration * 4 &&
+                if !isSpaceless && pauseLength > constrainedMedianDuration * 4 &&
                     (firstWordTooLong || bothWordsTooLong)
                 {
                     // First word or both words are too long
