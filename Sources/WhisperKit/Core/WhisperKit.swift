@@ -462,12 +462,12 @@ open class WhisperKit {
         // Search model folder for tokenizer if it is bundled with the model
         let additionalSearchPaths: [URL]
         if let modelFolder {
-//            // TODO: remove hub path in future version, retained as additional search path for backward compatibility
-//            let hubTokenizerFolderFromModel = HubApiWrapper(downloadBase: modelFolder).localRepoLocation(
-//                HubApiWrapper.Repo(id: ModelUtilities.tokenizerNameForVariant(modelVariant))
-//            )
+            // TODO: remove hub path in future version, retained as additional search path for backward compatibility
+            let hubTokenizerFolderFromModel = HubApiWrapper(downloadBase: modelFolder).localRepoLocation(
+                HubApiWrapper.Repo(id: ModelUtilities.tokenizerNameForVariant(modelVariant))
+            )
 
-            additionalSearchPaths = [modelFolder] // + [hubTokenizerFolderFromModel]
+            additionalSearchPaths = [modelFolder] + [hubTokenizerFolderFromModel]
         } else {
             additionalSearchPaths = []
         }
