@@ -39,4 +39,18 @@ public enum AutoTokenizerWrapper {
         let tok = try await AutoTokenizer.from(modelFolder: modelFolder, hubApi: hubApi, strict: strict)
         return TokenizerWrapper(tok)
     }
+
+    /// Loads a tokenizer from a local model folder without constructing a Hub API client.
+    ///
+    /// - Parameters:
+    ///   - modelFolder: The URL path to the local model folder containing tokenizer files
+    ///   - strict: Whether to enforce strict validation of the tokenizer class
+    /// - Returns: A `TokenizerWrapper` wrapping the loaded tokenizer
+    public static func fromLocal(
+        modelFolder: URL,
+        strict: Bool = true
+    ) async throws -> TokenizerWrapper {
+        let tok = try await AutoTokenizer.from(localModelFolder: modelFolder, strict: strict)
+        return TokenizerWrapper(tok)
+    }
 }

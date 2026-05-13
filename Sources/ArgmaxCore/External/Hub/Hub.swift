@@ -166,6 +166,15 @@ final class LanguageModelConfigurationFromHub: Sendable {
         }
     }
 
+    /// Initializes configuration loading from a local model directory without constructing a Hub API client.
+    ///
+    /// - Parameter modelFolder: The local directory containing model configuration files
+    init(localOnlyModelFolder modelFolder: URL) {
+        configPromise = Task {
+            try Self.loadConfigLocal(modelFolder: modelFolder)
+        }
+    }
+
     /// The main model configuration containing architecture and parameter settings.
     ///
     /// - Returns: The loaded model configuration
@@ -222,6 +231,77 @@ final class LanguageModelConfigurationFromHub: Sendable {
         }
     }
 
+    private static func localConfiguration(fileURL: URL) throws -> Config {
+        let data = try Data(contentsOf: fileURL)
+        guard let parsed = try? JSONSerialization.bomPreservingJsonObject(with: data) else {
+            throw Hub.HubClientError.jsonSerialization(
+                fileURL: fileURL,
+                message: "JSON Serialization failed for \(fileURL). Please verify the local tokenizer files are valid."
+            )
+        }
+        guard let dictionary = parsed as? [NSString: Any] else { throw Hub.HubClientError.parse }
+        return Config(dictionary)
+    }
+
+    private static func loadConfigFromFiles(
+        modelFolder: URL,
+        configurationLoader: (URL) throws -> Config
+    ) throws -> Configurations {
+        // Load required configurations
+        let modelConfigURL = modelFolder.appending(path: "config.json")
+
+        var modelConfig: Config? = nil
+        if FileManager.default.fileExists(atPath: modelConfigURL.path) {
+            modelConfig = try configurationLoader(modelConfigURL)
+        }
+
+        let tokenizerDataURL = modelFolder.appending(path: "tokenizer.json")
+        guard FileManager.default.fileExists(atPath: tokenizerDataURL.path) else {
+            throw Hub.HubClientError.configurationMissing("tokenizer.json")
+        }
+
+        let tokenizerData = try configurationLoader(tokenizerDataURL)
+
+        // Load tokenizer config (optional)
+        var tokenizerConfig: Config? = nil
+        let tokenizerConfigURL = modelFolder.appending(path: "tokenizer_config.json")
+        if FileManager.default.fileExists(atPath: tokenizerConfigURL.path) {
+            tokenizerConfig = try configurationLoader(tokenizerConfigURL)
+        }
+
+        // Check for chat template and merge if available
+        // Prefer .jinja template over .json template
+        var chatTemplate: String? = nil
+        let chatTemplateJinjaURL = modelFolder.appending(path: "chat_template.jinja")
+        let chatTemplateJsonURL = modelFolder.appending(path: "chat_template.json")
+
+        if FileManager.default.fileExists(atPath: chatTemplateJinjaURL.path) {
+            // Try to load .jinja template as plain text
+            chatTemplate = try? String(contentsOf: chatTemplateJinjaURL, encoding: .utf8)
+        } else if FileManager.default.fileExists(atPath: chatTemplateJsonURL.path),
+            let chatTemplateConfig = try? configurationLoader(chatTemplateJsonURL)
+        {
+            // Fall back to .json template
+            chatTemplate = chatTemplateConfig.chatTemplate.string()
+        }
+
+        if let chatTemplate {
+            // Create or update tokenizer config with chat template
+            if var configDict = tokenizerConfig?.dictionary() {
+                configDict["chat_template"] = .init(chatTemplate)
+                tokenizerConfig = Config(configDict)
+            } else {
+                tokenizerConfig = Config(["chat_template": chatTemplate])
+            }
+        }
+
+        return Configurations(
+            modelConfig: modelConfig,
+            tokenizerConfig: tokenizerConfig,
+            tokenizerData: tokenizerData
+        )
+    }
+
     static func loadConfig(
         modelName: String,
         revision: String,
@@ -256,58 +336,29 @@ final class LanguageModelConfigurationFromHub: Sendable {
         hubApi: HubApi = .shared
     ) async throws -> Configurations {
         do {
-            // Load required configurations
-            let modelConfigURL = modelFolder.appending(path: "config.json")
-
-            var modelConfig: Config? = nil
-            if FileManager.default.fileExists(atPath: modelConfigURL.path) {
-                modelConfig = try hubApi.configuration(fileURL: modelConfigURL)
-            }
-
-            let tokenizerDataURL = modelFolder.appending(path: "tokenizer.json")
-            guard FileManager.default.fileExists(atPath: tokenizerDataURL.path) else {
-                throw Hub.HubClientError.configurationMissing("tokenizer.json")
-            }
-
-            let tokenizerData = try hubApi.configuration(fileURL: tokenizerDataURL)
-
-            // Load tokenizer config (optional)
-            var tokenizerConfig: Config? = nil
-            let tokenizerConfigURL = modelFolder.appending(path: "tokenizer_config.json")
-            if FileManager.default.fileExists(atPath: tokenizerConfigURL.path) {
-                tokenizerConfig = try hubApi.configuration(fileURL: tokenizerConfigURL)
-            }
-
-            // Check for chat template and merge if available
-            // Prefer .jinja template over .json template
-            var chatTemplate: String? = nil
-            let chatTemplateJinjaURL = modelFolder.appending(path: "chat_template.jinja")
-            let chatTemplateJsonURL = modelFolder.appending(path: "chat_template.json")
-
-            if FileManager.default.fileExists(atPath: chatTemplateJinjaURL.path) {
-                // Try to load .jinja template as plain text
-                chatTemplate = try? String(contentsOf: chatTemplateJinjaURL, encoding: .utf8)
-            } else if FileManager.default.fileExists(atPath: chatTemplateJsonURL.path),
-                let chatTemplateConfig = try? hubApi.configuration(fileURL: chatTemplateJsonURL)
-            {
-                // Fall back to .json template
-                chatTemplate = chatTemplateConfig.chatTemplate.string()
-            }
-
-            if let chatTemplate {
-                // Create or update tokenizer config with chat template
-                if var configDict = tokenizerConfig?.dictionary() {
-                    configDict["chat_template"] = .init(chatTemplate)
-                    tokenizerConfig = Config(configDict)
-                } else {
-                    tokenizerConfig = Config(["chat_template": chatTemplate])
+            return try loadConfigFromFiles(
+                modelFolder: modelFolder,
+                configurationLoader: { try hubApi.configuration(fileURL: $0) }
+            )
+        } catch let error as Hub.HubClientError {
+            throw error
+        } catch {
+            if let nsError = error as NSError? {
+                if nsError.domain == NSCocoaErrorDomain, nsError.code == NSFileReadNoSuchFileError {
+                    throw Hub.HubClientError.fileSystemError(error)
+                } else if nsError.domain == "NSJSONSerialization" {
+                    throw Hub.HubClientError.parseError("Invalid JSON format: \(nsError.localizedDescription)")
                 }
             }
+            throw Hub.HubClientError.fileSystemError(error)
+        }
+    }
 
-            return Configurations(
-                modelConfig: modelConfig,
-                tokenizerConfig: tokenizerConfig,
-                tokenizerData: tokenizerData
+    static func loadConfigLocal(modelFolder: URL) throws -> Configurations {
+        do {
+            return try loadConfigFromFiles(
+                modelFolder: modelFolder,
+                configurationLoader: { try localConfiguration(fileURL: $0) }
             )
         } catch let error as Hub.HubClientError {
             throw error

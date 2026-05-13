@@ -21,8 +21,17 @@ extension ModelUtilities {
         useBackgroundSession: Bool = false
     ) async throws -> WhisperTokenizer {
         let tokenizerName = tokenizerNameForVariant(pretrained)
-        let hubApi = HubApiWrapper(downloadBase: tokenizerFolder, useBackgroundSession: useBackgroundSession)
-        let hubTokenizerFolder = hubApi.localRepoLocation(HubApiWrapper.Repo(id: tokenizerName))
+        let tokenizerBaseFolder: URL = {
+            if let tokenizerFolder {
+                return tokenizerFolder
+            }
+
+            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            return documents.appendingPathComponent("huggingface")
+        }()
+        let hubTokenizerFolder = tokenizerBaseFolder
+            .appendingPathComponent("models")
+            .appendingPathComponent(tokenizerName)
         
         // Determine which local folder to use
         let localTokenizerFolder: URL? = {
@@ -57,7 +66,7 @@ extension ModelUtilities {
         if let localFolder = localTokenizerFolder {
             do {
                 Logging.debug("Loading tokenizer from \(localFolder.path)")
-                let wrapper = try await AutoTokenizerWrapper.from(modelFolder: localFolder, hubApi: hubApi)
+                let wrapper = try await AutoTokenizerWrapper.fromLocal(modelFolder: localFolder)
                 return WhisperTokenizerWrapper(tokenizer: wrapper, at: localFolder)
             } catch {
                 // Error during the local loading process and fall through to load from Hub
@@ -67,6 +76,7 @@ extension ModelUtilities {
 
         // Fallback to downloading from the Hub if local loading is not possible or fails
         Logging.debug("Downloading tokenizer from Hub at \(hubTokenizerFolder)")
+        let hubApi = HubApiWrapper(downloadBase: tokenizerFolder, useBackgroundSession: useBackgroundSession)
         return try await WhisperTokenizerWrapper(
             tokenizer: AutoTokenizerWrapper.from(
                 pretrained: tokenizerName,

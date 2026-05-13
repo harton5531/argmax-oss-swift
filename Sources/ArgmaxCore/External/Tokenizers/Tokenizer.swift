@@ -636,6 +636,24 @@ extension AutoTokenizer {
 
         return try PreTrainedTokenizer(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, strict: strict)
     }
+
+    /// Loads a tokenizer from a local model folder without constructing a Hub API client.
+    ///
+    /// - Parameters:
+    ///   - modelFolder: The URL path to the local model folder
+    ///   - strict: Whether to enforce strict validation
+    /// - Returns: A configured `Tokenizer` instance
+    /// - Throws: `TokenizerError` if the model folder is invalid or missing files
+    static func from(
+        localModelFolder modelFolder: URL,
+        strict: Bool = true
+    ) async throws -> any Tokenizer {
+        let config = LanguageModelConfigurationFromHub(localOnlyModelFolder: modelFolder)
+        guard let tokenizerConfig = try await config.tokenizerConfig else { throw TokenizerError.missingConfig }
+        let tokenizerData = try await config.tokenizerData
+
+        return try PreTrainedTokenizer(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, strict: strict)
+    }
 }
 
 // MARK: - Tokenizer model classes
